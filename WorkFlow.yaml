@@ -1,0 +1,139 @@
+main:
+    params: [args]
+    steps:
+        - get_name:
+            assign:
+                - name: ${args.name}
+
+        - is_valid_input:
+            try:
+                steps:
+                    - get_is_valid_input:
+                        call: http.get
+                        args:
+                            url: http://130.211.127.80:8000/is_valid_input # API URL to check input validity
+                            query:
+                                x: "${name}"
+                        result: is_valid_input_result
+                    - check_result:
+                        switch:
+                            - condition: ${is_valid_input_result.code == 200 AND is_valid_input_result.body == "Success"}
+                              assign:
+                                - valid_input_check: ${is_valid_input_result.body}
+                            - condition: ${is_valid_input_result.code == 200 AND is_valid_input_result.body == "Fail"}
+                              steps:
+                                - assign_result_body_on_fail:
+                                    assign:
+                                      - valid_input_check: ${is_valid_input_result.body}
+                                      - process_res: null
+                                - update_to_bq_on_fail:
+                                    next: update_to_bq
+            
+            retry:
+                predicate: ${custom_predicate}
+                max_retries: 3
+                backoff:
+                    initial_delay: 1
+                    max_delay: 60
+                    multiplier: 2
+            
+            except:
+                as: e
+                steps:
+                    - known_errors:
+                        switch:
+                            - condition: ${e.code == 400 OR e.code == 500}
+                              steps:
+                                - assign_result_body_for_wrong_dtypes:
+                                    assign:
+                                      - valid_input_check: ${e.body.detail}
+                                      - process_res: null
+                                - update_to_bq_for_wrong_dtypes:
+                                    next: update_to_bq
+
+        - update_firestore_for_input_check:
+            steps:
+                - init_firestore_for_input_check:
+                    assign:
+                    - project_id: ${sys.get_env("GOOGLE_CLOUD_PROJECT_ID")}
+                    - collection: "collection1"
+                    - document: ${name}
+                - create_document:
+                    call: googleapis.firestore.v1.projects.databases.documents.createDocument
+                    args:
+                        collectionId: ${collection}
+                        parent: ${"projects/" + project_id + "/databases/(default)/documents"}
+                        query:
+                            documentId: ${document}
+                        body:
+                            fields:
+                                done:
+                                    arrayValue: 
+                                        values:
+                                            - stringValue: valid_input_check
+        
+        - process:
+            steps:
+                - post_to_process:
+                    call: http.post
+                    args:
+                        url: http://130.211.127.80:8000/process # API URL to process 'x'
+                        query:
+                            x: "${name}"
+                    result: process_result
+                - assign_process_response:
+                    assign:
+                      - process_res: ${process_result.body}
+
+        - update_firestore_for_process:
+            steps:
+                - init_firestore_for_process:
+                    assign:
+                    - project_id: ${sys.get_env("GOOGLE_CLOUD_PROJECT_ID")}
+                    - collection: "collection1"
+                    - document: ${name}
+                - update_document:
+                    call: googleapis.firestore.v1.projects.databases.documents.patch
+                    args:
+                        name: ${"projects/" + project_id + "/databases/(default)/documents/" + collection + "/" + document}
+                        body:
+                            fields:
+                                done:
+                                    arrayValue: 
+                                        values:
+                                            - stringValue: valid_input_check
+                                            - stringValue: process
+
+        - update_to_bq:
+            steps:
+                - save_to_bq:
+                    call: googleapis.bigquery.v2.tabledata.insertAll
+                    args:
+                        datasetId: "dataset1"
+                        projectId: "backendstarterproject-361103"
+                        tableId: "table2"
+                        body:
+                            rows: 
+                            - json:
+                                name: ${name}
+                                valid_input_check: ${valid_input_check}
+                                process: ${process_res}
+                                timestamp: "AUTO"
+                    result: insertAllResult
+
+        - return_data:
+            return:
+                - ${name}
+                - ${valid_input_check}
+                - ${process_res}
+
+
+custom_predicate:
+  params: [e]
+  steps:
+    - what_to_repeat:
+        switch:
+          - condition: ${e.code == 429}
+            return: true
+    - otherwise:
+        return: false
