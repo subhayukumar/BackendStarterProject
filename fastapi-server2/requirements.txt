@@ -1,1 +1,4 @@
-git commit -m "feat: add fastapi-service-2" -m "Fast api service needs to have 2 primary endpoints(and more auxiliary helper end points as you prefer)   - GET endpoint -  is_valid_input(x) : which returns the string 'Success” if the input is a string all in lower case, 'Fail” is the input is a string that has upper case, returns a 4XX error with a message ('{data_type}” is not allowed) if the data type is an int or float and a 5XX( run time exception if the input is a Boolean) Post end point - process(x) which should sleep for 3 mins, write x as a string to a bigquery table(that has just one field with the name input) before returning 'Success'"
+fastapi
+uvicorn
+firebase-admin
+google-cloud-workflows
